@@ -1,0 +1,39 @@
+# Ignore build artifacts
+build/
+dist/
+
+# Ignore runtime artifacts
+backups/
+imports/
+logs/
+
+# Ignore environment variables
+.env
+
+# Ignore node modules
+node_modules/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE & Editor Configuration ---
+# Ignore environment-specific settings from popular editors.
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore log files
+*.log
+
+# --- Local Overrides ---
+# Ignore local docker/podman-compose override files.
+# This allows developers to make local changes without affecting the main config.
+docker-compose.override.yml
+podman-compose.override.yml
+
+spin.sh
+unspin.sh
+*-copy.*
