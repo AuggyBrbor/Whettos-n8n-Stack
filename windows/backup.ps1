@@ -1,8 +1,7 @@
-# This script provides a graceful backup of the n8n pod on Windows.
+# This script provides a graceful backup of the n8n pod on Windows, correctly handling scaled workers.
 # It should be run from the root directory of the toolkit.
 
 # --- Configuration ---
-$ComposeFile = ".\windows\podman-compose.yml"
 $EnvFile = ".\.env"
 $BackupDir = ".\backups"
 
@@ -19,20 +18,23 @@ if (-not (Test-Path $BackupDir)) {
 }
 
 # --- Dynamic Name Discovery ---
-$ProjectName = (Get-Item -Path .).Name
-$NetworkName = (podman network ls --format "{{.Name}}") | Where-Object { $_ -like "*$($ProjectName)_n8n-stack" } | Select-Object -First 1
-$N8nDataVolume = (podman volume ls --format "{{.Name}}") | Where-Object { $_ -like "*$($ProjectName)_n8n-data" } | Select-Object -First 1
-
-if (-not $NetworkName -or -not $N8nDataVolume) {
-    Write-Host "Error: Could not find the podman network or volume for project '$($ProjectName)'. Is the pod running?" -ForegroundColor Red
-    exit 1
+$ProjectName = (podman inspect n8n-main --format '{{ index (index . 0).Labels "com.docker.compose.project" }}' 2>$null)
+if (-not $ProjectName) {
+    Write-Host "Warning: Could not get project name from label. Falling back to name parsing." -ForegroundColor Yellow
+    $WorkerName = (podman ps --format '{{.Names}}') | Where-Object { $_ -like "*_n8n-worker_*" } | Select-Object -First 1
+    if (-not $WorkerName) {
+        Write-Host "Error: Could not find a running n8n-worker container to determine project name. Is the pod running?" -ForegroundColor Red
+        exit 1
+    }
+    $ProjectName = $WorkerName.Split('_')[0]
 }
-Write-Host "Discovered network '$($NetworkName)' and volume '$($N8nDataVolume)'" -ForegroundColor Green
+
+$NetworkName = "$($ProjectName)_n8n-stack"
+$N8nDataVolume = "$($ProjectName)_n8n-data"
+Write-Host "Discovered project '$($ProjectName)', network '$($NetworkName)', and volume '$($N8nDataVolume)'" -ForegroundColor Green
 
 # --- Main Logic ---
 Write-Host "`n--- Starting Graceful Backup: $(Get-Date) ---" -ForegroundColor Cyan
-
-# Load .env file
 $envContent = Get-Content $EnvFile -Raw
 $envVars = $envContent | ConvertFrom-StringData -Delimiter '='
 $env:PGPASSWORD = $envVars.POSTGRES_PASSWORD
@@ -40,9 +42,16 @@ $postgresUser = if ($envVars.POSTGRES_USER) { $envVars.POSTGRES_USER } else { "n
 $postgresDb = if ($envVars.POSTGRES_DB) { $envVars.POSTGRES_DB } else { "n8n" }
 $retentionDays = if ($envVars.BACKUP_RETENTION_DAYS) { [int]$envVars.BACKUP_RETENTION_DAYS } else { 7 }
 
-# 1. Gracefully stop n8n services
-Write-Host "`nStep 1: Gracefully stopping n8n services..." -ForegroundColor Yellow
-podman-compose -f $ComposeFile stop n8n-main n8n-worker
+# 1. Dynamically find and gracefully stop all n8n services
+Write-Host "`nStep 1: Discovering and stopping n8n services..." -ForegroundColor Yellow
+$N8nContainers = (podman ps --filter "label=com.docker.compose.project=$($ProjectName)" --format '{{.ID}} {{.Names}}') | Where-Object { $_ -match "n8n-main" -or $_ -match "_n8n-worker" } | ForEach-Object { $_.Split(' ')[0] }
+if (-not $N8nContainers) {
+    Write-Host "Error: No running n8n-main or n8n-worker containers found for project '$($ProjectName)'." -ForegroundColor Red
+    exit 1
+}
+Write-Host "Found n8n containers to stop:"
+podman ps --filter "id=$($N8nContainers -join ",")" --format '{{.Names}}'
+podman stop $N8nContainers | Out-Null
 
 try {
     # 2. Create timestamped backup directory
@@ -61,8 +70,8 @@ try {
     # 4. Backup n8n Data Volume
     Write-Host "`nStep 3: Backing up n8n data volume..." -ForegroundColor Yellow
     $dataBackupFile = Join-Path -Path $currentBackupDir -ChildPath "n8n_data_volume.tar.gz"
-    $tarCommand = "podman run --rm --user `"1000:1000`" -v `"$N8nDataVolume`:/n8n-data:ro`" -v `"$($PWD.Path)\$currentBackupDir`:/backups`" docker.io/alpine:latest tar -czf `"/backups/n8n_data_volume.tar.gz`" -C `"/n8n-data`" ."
-    Invoke-Expression $tarCommand
+    $tarCommand = "podman run --rm --user `"1000:1000`" -v `"$N8nDataVolume`:/n8n-data:ro`" docker.io/alpine:latest tar -czf - -C `"/n8n-data`" ."
+    cmd /c "$tarCommand > `"$dataBackupFile`""
     Write-Host "Data volume backup complete."
 
     # 5. Prune Old Backups
@@ -75,7 +84,7 @@ try {
 finally {
     # Final step: Always restart n8n services
     Write-Host "`n--- Final Step: Restarting n8n services... ---" -ForegroundColor Yellow
-    podman-compose -f $ComposeFile start n8n-main n8n-worker
+    podman start $N8nContainers | Out-Null
     Write-Host "Backup process finished. Services are running." -ForegroundColor Green
     $env:PGPASSWORD = $null
 }

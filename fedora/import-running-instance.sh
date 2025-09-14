@@ -1,12 +1,9 @@
 #!/bin/bash
 
-# This script creates a new n8n instance and imports workflows from the '/imports' directory.
+# This script imports workflows from the '/imports' directory into a running n8n instance.
 # It should be run from the root directory of the toolkit.
 
 # --- Configuration ---
-COMPOSE_FILE="./fedora/podman-compose.yml"
-ENV_FILE=".env"
-ENV_TEMPLATE=".env.template"
 IMPORTS_DIR="./imports"
 CONTAINER_NAME="n8n-main"
 GREEN='\033[0;32m'
@@ -14,40 +11,13 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# --- Helper Functions ---
-function check_command() {
-    if ! command -v $1 &> /dev/null; then
-        echo -e "${RED}Error: Command '$1' not found. Please install it and try again.${NC}"
-        exit 1
-    fi
-}
-
 # --- Pre-flight Checks ---
 echo "--- Running Pre-flight Checks ---"
-check_command podman
-check_command podman-compose
 
-# Check for .env file
-if [ ! -f "$ENV_FILE" ]; then
-    echo -e "${YELLOW}Warning: '$ENV_FILE' not found.${NC}"
-    echo "Copying from '$ENV_TEMPLATE'..."
-    cp "$ENV_TEMPLATE" "$ENV_FILE"
-    echo -e "${YELLOW}Please edit the '$ENV_FILE' file with your credentials, then re-run this script.${NC}"
-    exit 1
-fi
-
-# Source .env file to check for required variables
-set -a
-source "$ENV_FILE"
-set +a
-
-if [[ -z "$POSTGRES_PASSWORD" || "$POSTGRES_PASSWORD" == "YourSuperSecretPassword" ]]; then
-    echo -e "${RED}Error: POSTGRES_PASSWORD is not set in the .env file. Please update it.${NC}"
-    exit 1
-fi
-
-if [[ -z "$N8N_E_KEY" || "$N8N_E_KEY" == "YourGenerated32CharacterEncryptionKey" ]]; then
-    echo -e "${RED}Error: N8N_E_KEY is not set in the .env file. Please update it.${NC}"
+# Check if the container is running
+if ! podman container exists "$CONTAINER_NAME" || ! [[ "$(podman inspect -f '{{.State.Status}}' "$CONTAINER_NAME")" == "running" ]]; then
+    echo -e "${RED}Error: The '$CONTAINER_NAME' container is not running.${NC}"
+    echo "Please start the pod before running this script."
     exit 1
 fi
 
@@ -63,14 +33,13 @@ echo ""
 
 # --- Workflow Import ---
 echo "--- Importing Workflows ---"
-echo "Waiting for n8n container to be ready..."
-sleep 15 # Give the container a moment to initialize
 
 echo "Copying workflows to container..."
 podman cp "$IMPORTS_DIR" "${CONTAINER_NAME}:/home/node/.n8n/imports"
 
 echo "Running import script inside the container..."
-IMPORT_COMMAND="cd /home/node/.n8n/imports && for file in *.json; do echo 'Importing workflow: \$file' && n8n import:workflow --input=\"\$file\"; done"
+# --- CORRECTED: Using double quotes inside the command to allow for variable expansion ---
+IMPORT_COMMAND="cd /home/node/.n8n/imports && for file in *.json; do echo \"Importing workflow: \$file\"; n8n import:workflow --input=\"\$file\"; done"
 podman exec "$CONTAINER_NAME" sh -c "$IMPORT_COMMAND"
 
 echo "Cleaning up import files from container..."

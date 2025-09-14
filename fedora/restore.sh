@@ -11,8 +11,11 @@ ENV_FILE=".env"
 DB_CONTAINER="n8n-postgres"
 DB_SERVICE_NAME="postgres"
 # --- UPDATED: Volume name is now constructed dynamically from the project folder name ---
-PROJECT_NAME=$(basename "$PWD")
+PROJECT_NAME="n8n_stack";
 N8N_DATA_VOLUME="${PROJECT_NAME}_n8n-data"
+PG_DATA_VOLUME="${PROJECT_NAME}_n8n-postgres-data"
+REDIS_DATA_VOLUME="${PROJECT_NAME}_n8n-redis-data"
+OLLAMA_DATA_VOLUME="${PROJECT_NAME}_ollama-data"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -67,46 +70,42 @@ fi
 
 # --- Restore Process ---
 echo -e "\n--- Starting Restore Process ---"
+echo "Step 1: Stopping and removing existing containers and networks..."
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down -v
 
-# 1. Tear down existing environment
-echo "Stopping and removing existing containers and volumes..."
-podman-compose -f "$COMPOSE_FILE" down -v
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to tear down existing environment. Please check for errors.${NC}"
-    exit 1
-fi
-echo "Environment cleared."
-
-# 2. Restore n8n data volume
-echo "Creating and restoring n8n data volume (${N8N_DATA_VOLUME})..."
+# Create new, empty volumes
+echo "Step 3: Creating fresh volumes..."
 podman volume create "$N8N_DATA_VOLUME" > /dev/null
-gunzip < "$DATA_BACKUP_FILE" | podman volume import "$N8N_DATA_VOLUME" -
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to restore n8n data volume.${NC}"
-    exit 1
-fi
+echo "Volumes created."
+
+# --- CORRECTED: Use a helper container to restore n8n data with correct permissions ---
+echo "Step 4: Restoring n8n data volume using a helper container..."
+podman run --rm \
+  --user 1000:1000 \
+  -v "$N8N_DATA_VOLUME:/n8n-data:z" \
+  -v "$PWD/$SELECTED_BACKUP_DIR:/backups:ro,z" \
+  docker.io/alpine:latest \
+  tar -xzf "/backups/n8n_data_volume.tar.gz" -C "/n8n-data"
 echo "Data volume restored."
 
-# 3. Start database and restore data
-echo "Starting PostgreSQL service..."
-podman-compose -f "$COMPOSE_FILE" up -d "$DB_SERVICE_NAME"
+# Restore the database using a temporary container
+echo "Step 4: Starting a temporary PostgreSQL container..."
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d "$DB_SERVICE_NAME"
 echo "Waiting for database to initialize (20 seconds)..."
 sleep 20
-
-echo "Restoring database from backup..."
+echo "Step 5: Restoring database..."
 set -a; source "$ENV_FILE"; set +a
-export PGPASSWORD=$POSTGRES_PASSWORD
-gunzip < "$DB_BACKUP_FILE" | podman exec -i "$DB_CONTAINER" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-unset PGPASSWORD
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to restore database.${NC}"
-    exit 1
-fi
+podman cp "$DB_BACKUP_FILE" "${DB_CONTAINER}:/tmp/n8n_db_backup.sql.gz"
+
+# Execute gunzip and pg_restore as the 'postgres' user
+podman exec -u postgres "$DB_CONTAINER" bash -c "gunzip < /tmp/n8n_db_backup.sql.gz | pg_restore -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" --clean --if-exists --no-owner --role=\"$POSTGRES_USER\""
+
+podman exec "$DB_CONTAINER" rm /tmp/n8n_db_backup.sql.gz
 echo "Database restore complete."
 
 # 4. Start all other services
 echo "Starting all remaining services..."
-podman-compose -f "$COMPOSE_FILE" up -d
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to start all services.${NC}"
     exit 1

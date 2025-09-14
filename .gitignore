@@ -37,3 +37,4 @@ podman-compose.override.yml
 spin.sh
 unspin.sh
 *-copy.*
+* copy.*

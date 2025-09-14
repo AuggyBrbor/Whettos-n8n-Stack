@@ -113,7 +113,7 @@ services:
       - n8n-stack
     user: "1000:1000"
     environment:
-      - N8N_HOST=http://10.89.0.5:5678/api/v1
+      - N8N_HOST=http://n8n-main:5678/api/v1
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
       - EXECUTIONS_PROCESS=worker
@@ -151,6 +151,7 @@ services:
       - CODE_ENABLE_STDOUT=true
       - N8N_UNVERIFIED_PACKAGES_ENABLED=true
       - NODE_FUNCTION_ALLOW_BUILTIN=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
     volumes:
       - n8n-data:/home/node/.n8n:z # SELinux fix
     restart: unless-stopped
@@ -190,7 +191,7 @@ services:
         echo 'Ollama is up. Checking if model $${OLLAMA_DEFAULT_MODEL} exists...'
         if ! curl -s http://ollama:11434/api/tags | grep -q $${OLLAMA_DEFAULT_MODEL}; then
           echo 'Model not found. Pulling $${OLLAMA_DEFAULT_MODEL}...'
-          curl http://ollama:11434/api/pull -d '{ \"name\": \"'$${OLLAMA_DEFAULT_MODEL}'\" }'
+          curl http://ollama:11434/api/pull -d \"{ \\\"name\\\": \\\"$${OLLAMA_DEFAULT_MODEL}\\\" }\"
           echo 'Model pull complete.'
         else
           echo 'Model $${OLLAMA_DEFAULT_MODEL} already exists.'
@@ -214,7 +215,7 @@ services:
       - N8N_API_URL=http://n8n-main:5678
     restart: unless-stopped
     depends_on:
-      ollama: 
+      ollama:
         condition: service_started
       n8n-main:
         condition: service_started

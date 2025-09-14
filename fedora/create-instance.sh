@@ -4,12 +4,13 @@
 # It should be run from the root directory of the toolkit.
 
 # --- Configuration ---
-COMPOSE_FILE="./fedora/podman-compose.yml"
-ENV_FILE=".env"
-ENV_TEMPLATE=".env.template"
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
+COMPOSE_FILE="./fedora/podman-compose.yml";
+PROJECT_NAME="n8n_stack";
+ENV_FILE=".env";
+ENV_TEMPLATE=".env.template";
+GREEN='\033[0;32m';
+YELLOW='\033[1;33m';
+RED='\033[0;31m';
 NC='\033[0m' # No Color
 
 # --- Helper Functions ---
@@ -55,10 +56,10 @@ echo ""
 # --- Deployment ---
 echo "--- Starting Deployment ---"
 echo "Pulling the latest container images..."
-podman-compose -f "$COMPOSE_FILE" pull
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" pull
 
 echo "Starting the services... (This may take a moment)"
-podman-compose -f "$COMPOSE_FILE" up -d
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}Deployment successful!${NC}"

@@ -136,7 +136,7 @@ services:
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=84
       - N8N_DIAGNOSTICS_ENABLED=false
-      #- N8N_HIDE_USAGE_PAGE=true
+      - N8N_HIDE_USAGE_PAGE=true
       - N8N_LOG_FORMAT=text
       - N8N_SECURITY_AUDIT_DAYS_ABANDONED_WORKFLOW=365
       - N8N_HIRING_BANNER_ENABLED=false
@@ -212,10 +212,8 @@ services:
       - N8N_API_URL=http://n8n-main:5678
     restart: unless-stopped
     depends_on:
-      ollama: 
-        condition: service_started
-      n8n-main:
-        condition: service_started
+      ollama: { condition: service_started }
+      n8n-main: { condition: service_started }
 
 # Top-level 'volumes' declaration for all persistent data.
 volumes:
