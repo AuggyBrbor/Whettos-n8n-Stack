@@ -60,8 +60,8 @@ services:
       # Binds the port only to the host's loopback interface for security.
       - "127.0.0.1:5678:5678"
     environment:
-      - N8N_HOST=http://127.0.0.1:5678/api/v1
-      - WEBHOOK_URL=http://127.0.0.1:5678
+      - N8N_HOST=http://n8n-main:5678/api/v1
+      - WEBHOOK_URL=http://n8n-main:5678
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
       - DB_TYPE=postgresdb
@@ -205,14 +205,19 @@ services:
     container_name: n8n-mcp
     hostname: n8n-mcp
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:3000:3000"
     networks:
       - n8n-stack
     environment:
       - OLLAMA_API_BASE_URL=http://ollama:11434
       - N8N_MCP_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err}
       - N8N_API_KEY=${N8N_API_KEY}
-      - N8N_API_URL=http://n8n-main:5678
+      - N8N_API_URL=http://n8n-main:5678/api/v1
+      - MCP_MODE=http
+      - N8N_MODE=true
+      - MCP_AUTH_TOKEN=test-token-minimum-32-chars-long
+      - AUTH_TOKEN=test-token-minimum-32-chars-long
+      - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
       ollama:
