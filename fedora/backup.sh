@@ -54,14 +54,14 @@ echo "✅ Core containers are running."
 # 2. Create timestamped backup directory
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 CURRENT_BACKUP_DIR="$BACKUP_DIR/backup_$TIMESTAMP"
-DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_db.dump"
-N8N_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_data.tar.gz"
+DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_database.sql.gz"
+N8N_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_files.tar.gz"
 mkdir -p "$CURRENT_BACKUP_DIR"
 
 # 3. Backup PostgreSQL Database
 echo -e "\n⏳ Backing up PostgreSQL database..."
 # Execute as the 'postgres' user inside the container to simplify authentication.
-podman exec --user postgres n8n-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c > "$DB_BACKUP_FILE"
+podman exec --user postgres n8n-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c > gzip "$DB_BACKUP_FILE"
 
 echo "✅ Database backup complete: $DB_BACKUP_FILE"
 
