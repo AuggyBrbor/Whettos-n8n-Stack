@@ -1,95 +1,84 @@
 #!/bin/bash
+# A non-disruptive script to back up a running n8n podman-compose stack.
+# This script is intended to be run from the project root directory.
 
-# This script provides a graceful backup of the n8n pod.
-# It stops the n8n services, runs temporary backup containers, and restarts them.
-# It should be run from the root directory of the toolkit.
-
-# set -eo pipefail
+# Exit immediately if a command exits with a non-zero status.
+set -e
 
 # --- Configuration ---
-COMPOSE_FILE="./fedora/podman-compose.yml"
-ENV_FILE=".env"
 BACKUP_DIR="./backups"
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+COMPOSE_FILE="./fedora/podman-compose.yml"
+ENV_FILE="./.env"
 
 # --- Pre-flight Checks ---
-echo "--- Running Pre-flight Checks ---"
+echo "🚀 Running pre-flight checks..."
 if ! command -v podman &> /dev/null || ! command -v podman-compose &> /dev/null; then
-    echo -e "${RED}Error: 'podman' or 'podman-compose' not found.${NC}"; exit 1;
+    echo "❌ Error: 'podman' or 'podman-compose' not found." >&2; exit 1;
+fi
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "❌ Error: Compose file not found. Please run this script from your project's root directory." >&2; exit 1;
 fi
 if [ ! -f "$ENV_FILE" ]; then
-    echo -e "${RED}Error: '$ENV_FILE' not found. Cannot proceed without credentials.${NC}"; exit 1;
+    echo "❌ Error: '$ENV_FILE' not found in the project root. Cannot proceed without credentials." >&2; exit 1;
 fi
 mkdir -p "$BACKUP_DIR"
 
-# --- Dynamic Name Discovery ---
-PROJECT_NAME="n8n_stack";
-
-NETWORK_NAME="${PROJECT_NAME}_n8n-stack"
-N8N_DATA_VOLUME="${PROJECT_NAME}_n8n-data"
-echo -e "${GREEN}Discovered project '${PROJECT_NAME}', network '${NETWORK_NAME}', and volume '${N8N_DATA_VOLUME}'${NC}"
-
 # --- Main Logic ---
-echo -e "\n--- Starting Graceful Backup: $(date) ---"
+echo -e "\n--- Starting Live Backup: $(date) ---"
 
-# Source environment variables and validate them
+# Source environment variables from the project root
 set -a
+# shellcheck source=../.env
 source "$ENV_FILE"
 set +a
 
-# --- ADDED: Explicit checks for required backup variables ---
-if [[ -z "$POSTGRES_USER" || -z "$POSTGRES_PASSWORD" || -z "$POSTGRES_DB" ]]; then
-    echo -e "${RED}Error: Required database variables are not set in the .env file.${NC}"; exit 1;
+# Validate required variables
+if [[ -z "$POSTGRES_USER" || -z "$POSTGRES_DB" ]]; then
+    echo "❌ Error: Required database variables (POSTGRES_USER, POSTGRES_DB) are not set in the .env file." >&2; exit 1;
 fi
 RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
 
-# 1. Dynamically find and gracefully stop all n8n services
-
-podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" stop n8n-main n8n-worker
-
-# Use a trap to ensure services are restarted even if the script fails
-function cleanup {
-  echo -e "\n${YELLOW}--- Final Step: Restarting n8n services... ---${NC}"
-  podman start $N8N_CONTAINERS > /dev/null
-  echo -e "${GREEN}Backup process finished. Services are running.${NC}"
-}
-trap cleanup EXIT
+# 1. Ensure services are running for the backup
+echo "🔎 Verifying that core containers are running..."
+for C in "n8n-postgres" "n8n-main"; do
+    if ! podman container exists "$C" || ! podman inspect --format='{{.State.Running}}' "$C" | grep -q "true"; then
+        echo "⚠️ Container '$C' not found or not running. Starting the stack..."
+        podman-compose -f "$COMPOSE_FILE" up -d
+        echo "Waiting for services to initialize..."
+        sleep 15
+        break # Exit loop after starting stack
+    fi
+done
+echo "✅ Core containers are running."
 
 # 2. Create timestamped backup directory
-TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 CURRENT_BACKUP_DIR="$BACKUP_DIR/backup_$TIMESTAMP"
-
-echo "Creating backup directory: $CURRENT_BACKUP_DIR"
+DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_db.dump"
+N8N_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_data.tar.gz"
 mkdir -p "$CURRENT_BACKUP_DIR"
-echo "Created backup directory: $CURRENT_BACKUP_DIR"
 
 # 3. Backup PostgreSQL Database
-DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_db_backup.sql.gz"
-echo -e "\n${YELLOW}Step 2: Backing up PostgreSQL database...${NC}"
-podman run --rm \
-  --network "$NETWORK_NAME" \
-  -e PGPASSWORD="$POSTGRES_PASSWORD" \
-  -v "$PWD/$CURRENT_BACKUP_DIR:/backups:z" \
-  docker.io/postgres:16 \
-  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c -b -v | gzip > "$CURRENT_BACKUP_DIR/n8n_db_backup.sql.gz"
-echo "Database backup complete."
+echo -e "\n⏳ Backing up PostgreSQL database..."
+# Execute as the 'postgres' user inside the container to simplify authentication.
+podman exec --user postgres n8n-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c > "$DB_BACKUP_FILE"
+
+echo "✅ Database backup complete: $DB_BACKUP_FILE"
 
 # 4. Backup n8n Data Volume
-echo -e "\n${YELLOW}Step 3: Backing up n8n data volume...${NC}"
-podman run --rm \
-  --user 1000:1000 \
-  -v "$N8N_DATA_VOLUME:/n8n-data:ro,z" \
-  docker.io/alpine:latest \
-  tar -czf - -C "/n8n-data" . \
-  > "$CURRENT_BACKUP_DIR/n8n_data_volume.tar.gz"
-echo "Data volume backup complete."
+echo -e "\n⏳ Backing up n8n data volume..."
+# --- FINAL FIX ---
+# Execute 'tar' directly inside the 'n8n-main' container.
+# This container runs as the correct user and has guaranteed access to its volume data.
+# The '-' tells tar to send the archive to stdout, which we redirect to our host file.
+podman exec n8n-main \
+  tar -czpf - -C /home/node/.n8n . > "$N8N_BACKUP_FILE"
+
+echo "✅ Data volume backup complete: $N8N_BACKUP_FILE"
 
 # 5. Prune Old Backups
-echo -e "\n${YELLOW}Step 4: Pruning backups older than $RETENTION_DAYS days...${NC}"
-find "$BACKUP_DIR" -type d -name "backup_*" -mtime +"$RETENTION_DAYS" -exec echo "Removing old backup: {}" \; -exec rm -rf {} \;
-echo "Pruning complete."
+echo -e "\n🧹 Pruning backups older than $RETENTION_DAYS days..."
+find "$BACKUP_DIR" -type d -name "backup_*" -mtime +"$RETENTION_DAYS" -exec echo "  - Removing old backup: {}" \; -exec rm -rf {} \;
+echo "✅ Pruning complete."
 
-podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" start n8n-main n8n-worker
+echo -e "\n🎉 Backup process finished successfully!"

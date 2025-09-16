@@ -14,7 +14,7 @@ The stack includes:
 
 ## File Structure
 ```
-. [ Project root folder, must be named "n8n-podman" ]
+. [ Project root folder ]
 ├── .env.template                        # Template for environment variables
 ├── backups/                             # Backup files will be stored here
 ├── fedora/
