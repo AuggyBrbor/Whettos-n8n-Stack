@@ -52,16 +52,19 @@ done
 echo "✅ Core containers are running."
 
 # 2. Create timestamped backup directory
-TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-CURRENT_BACKUP_DIR="$BACKUP_DIR/backup_$TIMESTAMP"
-DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_database.sql.gz"
-N8N_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_files.tar.gz"
-mkdir -p "$CURRENT_BACKUP_DIR"
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S");
+CURRENT_BACKUP_DIR="$BACKUP_DIR/backup_$TIMESTAMP";
+DB_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_database.sql.gz";
+N8N_BACKUP_FILE="$CURRENT_BACKUP_DIR/n8n_files.tar.gz";
+WORKFLOW_DIR="$CURRENT_BACKUP_DIR";
+CREDS_DIR="$CURRENT_BACKUP_DIR";
+mkdir -p "$WORKFLOW_DIR";
+mkdir -p "$CREDS_DIR";
 
 # 3. Backup PostgreSQL Database
 echo -e "\n⏳ Backing up PostgreSQL database..."
 # Execute as the 'postgres' user inside the container to simplify authentication.
-podman exec --user postgres n8n-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c > gzip "$DB_BACKUP_FILE"
+podman exec --user postgres n8n-postgres pg_dump -U $POSTGRES_USER -d $POSTGRES_DB -F c | gzip > "$DB_BACKUP_FILE"
 
 echo "✅ Database backup complete: $DB_BACKUP_FILE"
 
@@ -71,8 +74,14 @@ echo -e "\n⏳ Backing up n8n data volume..."
 # Execute 'tar' directly inside the 'n8n-main' container.
 # This container runs as the correct user and has guaranteed access to its volume data.
 # The '-' tells tar to send the archive to stdout, which we redirect to our host file.
-podman exec n8n-main \
-  tar -czpf - -C /home/node/.n8n . > "$N8N_BACKUP_FILE"
+podman exec n8n-main tar -czpf - -C /home/node/.n8n . > "$N8N_BACKUP_FILE"
+
+podman exec -u node -it n8n-main n8n export:workflow --backup --output=backups/latest/workflows
+podman cp n8n-main:/home/node/backups/latest/workflows "$WORKFLOW_DIR"
+podman exec -u node -it n8n-main rm -rf ./backups/latest/workflows
+podman exec -u node -it n8n-main n8n export:credentials --backup --output=backups/latest/creds
+podman cp n8n-main:/home/node/backups/latest/creds "$CREDS_DIR"
+podman exec -u node -it n8n-main rm -rf ./backups/latest/creds
 
 echo "✅ Data volume backup complete: $N8N_BACKUP_FILE"
 

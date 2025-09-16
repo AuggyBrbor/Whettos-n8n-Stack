@@ -88,10 +88,9 @@ echo -e "\n--- Starting Restore Process ---"
 echo
 echo "🛑 Stopping n8n stack and removing existing volumes..."
 cd "${PROJECT_ROOT}"
-podman pod rm "pod_$PROJECT_NAME" || true;
-podman volume ls --format "{{.Name}}" | grep -E "${PROJECT_NAME}_" | xargs podman volume rm -f || true;
-
-# echo "Step 1: Stopping application containers (PostgreSQL will remain running)..."
+podman pod stop "pod_$PROJECT_NAME" --ignore
+podman pod rm "pod_$PROJECT_NAME" --force || true;
+podman volume ls --format "{{.Name}}" | grep -E "${PROJECT_NAME}_" | xargs --no-run-if-empty podman volume rm -f
 # # We add '|| true' to prevent the script from exiting if a container is already stopped.
 # podman pod ps -f="name=pod_$PROJECT_NAME" --format="{{.ContainerNames}}" --ctr-names | tr ',' '\n' | grep -vE 'postgres$|^ollama' | xargs podman container stop || true
 echo "✅ Stack stopped and volumes removed."
@@ -102,21 +101,15 @@ podman volume create "${N8N_DATA_VOLUME_NAME}"
 # Use a helper container to unpack the archive into the newly created volume
 podman run --rm \
     -v "${N8N_DATA_VOLUME_NAME}:/volume-data:z" \
-    -v "${N8N_BACKUP_FILE}:/backup/archive.tar.gz:ro" \
+    -v "${N8N_BACKUP_FILE}:/backup/archive.tar.gz:ro,z" \
     docker.io/alpine \
-    tar -xzf /backup/archive.tar.gz -C /volume-data
-# podman run --rm \
-#   --user root \
-#   -v "$N8N_DATA_VOLUME:/n8n-data:z" \
-#   -v "$PWD/$SELECTED_BACKUP_DIR:/backups:ro,z" \
-#   docker.io/alpine:latest \
-#   tar -xzpf "/backups/n8n_data.tar.gz" -C "/n8n-data"
-
+    tar -xzpf /backup/archive.tar.gz -C /volume-data
+    
 echo "✅ n8n data restore complete."
 
 echo "Step 3: Restoring database..."
 echo "Starting PostgreSQL service to receive data..."
-podman-compose -p $PROJECT_NAME -f $COMPOSE_FILE up -d "${DB_SERVICE_NAME}"
+podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d "${DB_SERVICE_NAME}"
 
 echo "Waiting for PostgreSQL to be healthy..."
 until podman inspect --format "{{.State.Health.Status}}" "${N8N_DB_CONTAINER_NAME}" 2>/dev/null | grep -q "healthy"; do
@@ -127,21 +120,11 @@ echo
 echo "✅ PostgreSQL is healthy."
 
 echo "Importing database from '${DB_BACKUP_FILE}'..."
-gunzip < "${DB_BACKUP_FILE}" | podman exec -i "${N8N_DB_CONTAINER_NAME}" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
-
-
-# We wrap the database restore in a subshell ( ... )
-# This localizes the exported .env variables, preventing them from interfering
-# with the final 'podman-compose up' command.
-# (
-#   # Source the .env file to get credentials
-#   set -a; source "$ENV_FILE"; set +a
-#   # Pipe the backup file into 'podman exec' which runs pg_restore inside the container.
-#   # Execute as the OS user 'postgres' and connect as the DB user 'n8n'.
-#   cat "$DB_BACKUP_FILE" | podman exec -i --user postgres \
-#     "$N8N_DB_CONTAINER_NAME" \
-#     pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --exit-on-error
-# )
+# Pipe the backup file into 'podman exec' which runs pg_restore inside the container.
+# Execute as the OS user 'postgres' and connect as the DB user 'n8n'.
+gunzip < "$DB_BACKUP_FILE" | podman exec -i --user postgres \
+  "$N8N_DB_CONTAINER_NAME" \
+  pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --exit-on-error
 echo "✅ Database import complete."
 
 # --- Step 4: Restart the Full Stack ---
