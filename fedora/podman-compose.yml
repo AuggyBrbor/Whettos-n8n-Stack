@@ -61,7 +61,7 @@ services:
       - "127.0.0.1:5678:5678"
     environment:
       - N8N_HOST=http://n8n-main:5678/api/v1
-      - WEBHOOK_URL=http://n8n-main:5678
+      - WEBHOOK_URL=http://127.0.0.1:5678
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
       - DB_TYPE=postgresdb
@@ -117,7 +117,6 @@ services:
       - N8N_HOST=http://n8n-main:5678/api/v1
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
-      - EXECUTIONS_PROCESS=worker
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?err} # Set in .env file.
@@ -160,46 +159,85 @@ services:
       n8n-main: 
         condition: service_started
 
-  # The Ollama service for running local Language Models.
-  ollama:
-    image: docker.io/ollama/ollama:latest
-    container_name: ollama-service
-    hostname: ollama
-    networks:
-      - n8n-stack
-    ports:
-      - "127.0.0.1:11434:11434" # Bind to localhost.
-    volumes:
-      - ollama-data:/root/.ollama:z # SELinux fix
-    # devices:
-    #   - /dev/kfd
-    #   - /dev/dri
-    restart: unless-stopped
+  # # The Ollama service for running local Language Models via AMD/NVidia
+  # ollama:
+  #   image: docker.io/ollama/ollama:latest
+  #   container_name: ollama-service
+  #   hostname: ollama
+  #   networks:
+  #     - n8n-stack
+  #   ports:
+  #     - "127.0.0.1:11434:11434" # Bind to localhost.
+  #   volumes:
+  #     - ollama-data:/root/.ollama:z # SELinux fix
+  #   # devices:
+  #   #   - /dev/kfd
+  #   #   - /dev/dri
+  #   restart: unless-stopped
 
-  ollama-setup:
-    image: docker.io/alpine/curl:latest
-    container_name: ollama-setup
-    networks:
-      - n8n-stack
-    environment:
-      - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err}
-    command: >
-      sh -c "
-        echo 'Waiting for Ollama to be available...'
-        until curl -s -f http://ollama:11434/api/tags > /dev/null; do
-          sleep 5
-        done
-        echo 'Ollama is up. Checking if model $${OLLAMA_DEFAULT_MODEL} exists...'
-        if ! curl -s http://ollama:11434/api/tags | grep -q $${OLLAMA_DEFAULT_MODEL}; then
-          echo 'Model not found. Pulling $${OLLAMA_DEFAULT_MODEL}...'
-          curl http://ollama:11434/api/pull -d \"{ \\\"name\\\": \\\"$${OLLAMA_DEFAULT_MODEL}\\\" }\"
-          echo 'Model pull complete.'
-        else
-          echo 'Model $${OLLAMA_DEFAULT_MODEL} already exists.'
-        fi
-      "
-    depends_on:
-      - ollama
+  # # # The Ollama service for running local Language Models via Intel
+  # ollama:
+  #   build:
+  #     context: .
+  #     dockerfile: ../ollama-intel
+  #     args:
+  #       IPEXLLM_RELEASE_REPO: ipex-llm/ipex-llm
+  #       IPEXLLM_RELEASE_VERSON: v2.2.0
+  #       IPEXLLM_PORTABLE_ZIP_FILENAME: ollama-ipex-llm-2.2.0-ubuntu.tgz
+  #   container_name: ollama-service
+  #   restart: unless-stopped
+  #   hostname: ollama
+  #   networks:
+  #     - n8n-stack
+  #   ports:
+  #     - "127.0.0.1:11434:11434" # Bind to localhost.
+  #   devices:
+  #     - /dev/dri:/dev/dri
+  #   volumes:
+  #     - ollama-data:/root/.ollama:z # SELinux fix
+  #   environment:
+  #     - ONEAPI_DEVICE_SELECTOR=level_zero:0
+  #     - IPEX_LLM_NUM_CTX=16384
+
+  # ollama-webui:
+  #   image: ghcr.io/open-webui/open-webui
+  #   container_name: ollama-webui
+  #   volumes:
+  #     - ollama-webui:/app/backend/data
+  #   depends_on:
+  #     - ollama
+  #   ports:
+  #     - ${OLLAMA_WEBUI_PORT-3001}:8080
+  #   environment:
+  #     - OLLAMA_BASE_URL=http://ollama:11434
+  #   extra_hosts:
+  #     - host.docker.internal:host-gateway
+  #   restart: unless-stopped
+
+  # ollama-setup:
+  #   image: docker.io/alpine/curl:latest
+  #   container_name: ollama-setup
+  #   networks:
+  #     - n8n-stack
+  #   environment:
+  #     - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err}
+  #   command: >
+  #     sh -c "
+  #       echo 'Waiting for Ollama to be available...'
+  #       until curl -s -f http://ollama:11434/api/tags > /dev/null; do
+  #         sleep 5
+  #       done
+  #       echo 'Ollama is up. Checking if model $${OLLAMA_DEFAULT_MODEL} exists...'
+  #       if ! curl -s http://ollama:11434/api/tags | grep -q $${OLLAMA_DEFAULT_MODEL}; then
+  #         echo 'Model not found. Pulling $${OLLAMA_DEFAULT_MODEL}...'
+  #         curl http://ollama:11434/api/pull -d \"{ \\\"name\\\": \\\"$${OLLAMA_DEFAULT_MODEL}\\\" }\"
+  #         echo 'Model pull complete.'
+  #       else
+  #         echo 'Model $${OLLAMA_DEFAULT_MODEL} already exists.'
+  #       fi
+  #     "
+  #   depends_on:
+  #     - ollama
 
   n8n-mcp:
     image: ghcr.io/czlonkowski/n8n-mcp:latest
@@ -210,8 +248,6 @@ services:
     networks:
       - n8n-stack
     environment:
-      - OLLAMA_API_BASE_URL=http://ollama:11434
-      - N8N_MCP_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err}
       - N8N_API_KEY=${N8N_API_KEY}
       - N8N_API_URL=http://n8n-main:5678/api/v1
       - MCP_MODE=http
@@ -221,8 +257,6 @@ services:
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_started
       n8n-main:
         condition: service_started
 
@@ -231,4 +265,5 @@ volumes:
   n8n-data:
   n8n-postgres-data:
   n8n-redis-data:
-  ollama-data:
+  # ollama-data:
+  # ollama-webui:
