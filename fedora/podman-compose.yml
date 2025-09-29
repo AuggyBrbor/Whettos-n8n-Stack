@@ -63,6 +63,9 @@ services:
       - N8N_HOST=http://n8n-main:5678/api/v1
       - WEBHOOK_URL=http://127.0.0.1:5678
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
+      # For SQLite default DB - DO NOT USE WITH THE POSTGRES+REDIS+WORKERS
+      # - DB_SQLITE_POOL_SIZE=5
+      # For PostgreSQL with redis and workers
       - EXECUTIONS_MODE=queue
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
@@ -74,14 +77,14 @@ services:
       - CACHE_ENABLE=true
       - CACHE_TYPE=redis
       - CACHE_REDIS_HOST=redis
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Denver}
+      - N8N_RUNNERS_ENABLED=true
       - N8N_LOG_LEVEL=info
       - N8N_METRICS_ENABLED=true
       - N8N_METRICS=true
       - N8N_ENCRYPTION_KEY=${N8N_E_KEY:?err}
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=84
       - N8N_DIAGNOSTICS_ENABLED=false
