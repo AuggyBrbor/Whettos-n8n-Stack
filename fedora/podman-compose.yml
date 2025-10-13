@@ -1,6 +1,7 @@
 # A revised and validated compose file for a scalable n8n, PostgreSQL, Redis, and Ollama stack.
 # Optimized for use with podman-compose on a Fedora 42 system.
-version: '3.8'
+# This version includes Nginx Proxy Manager for reverse proxying and Watchtower for automatic updates.
+version: '4.2a'
 
 networks:
   # A dedicated network for the stack improves security and isolation.
@@ -11,22 +12,44 @@ services:
   # The PostgreSQL database service for n8n data persistence.
   postgres:
     image: docker.io/postgres:16
-    container_name: n8n-postgres
+    container_name: n8n-${POSTGRES_HOST:-postgres}
     hostname: postgres
     networks:
       - n8n-stack
     environment:
       # Load sensitive values from a .env file for better security.
       - POSTGRES_USER=${POSTGRES_USER:-n8n}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?err} # Must be set in .env file. The :?err makes this variable required.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?err} # Required: Set in .env
       - POSTGRES_DB=${POSTGRES_DB:-n8n}
       - POSTGRES_MAX_CONNECTIONS=150
     volumes:
-      # The ':z' is crucial for SELinux on Fedora to allow container access.
+      # The ':z' is crucial for SELinux on Fedora.
       - n8n-postgres-data:/var/lib/postgresql/data:z
     restart: unless-stopped
     healthcheck:
-      # $$ is used to escape the $ for variable expansion within the container's shell.
+      # $$ is used to escape the $ for variable expansion.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-n8n} -d $${POSTGRES_DB:-n8n}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clientData:
+    image: pgvector/pgvector:pg16
+    container_name: clientData
+    hostname: clientData
+    networks:
+      - n8n-stack
+    environment:
+      # Load sensitive values from a .env file for better security.
+      - POSTGRES_USER=${POSTGRES_USER:-n8n}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?err} # Required: Set in .env
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
+      - POSTGRES_MAX_CONNECTIONS=150
+    volumes:
+      - client-postgres-data:/var/lib/postgresql/data:z
+    restart: unless-stopped
+    healthcheck:
+      # $$ is used to escape the $ for variable expansion.
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-n8n} -d $${POSTGRES_DB:-n8n}"]
       interval: 10s
       timeout: 5s
@@ -40,7 +63,7 @@ services:
     networks:
       - n8n-stack
     volumes:
-      - n8n-redis-data:/data:z # SELinux fix
+      - n8n-redis-data:/data:z
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -50,7 +73,7 @@ services:
 
   # The main n8n service: handles UI, API, and queues jobs.
   n8n-main:
-    image: docker.io/n8nio/n8n:latest # Pinning to latest for bug fixes and security.
+    image: docker.io/n8nio/n8n:latest
     container_name: n8n-main
     hostname: n8n-main
     networks:
@@ -63,13 +86,12 @@ services:
       - N8N_HOST=http://n8n-main:5678/api/v1
       - WEBHOOK_URL=http://127.0.0.1:5678
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
-      # For SQLite default DB - DO NOT USE WITH THE POSTGRES+REDIS+WORKERS
-      # - DB_SQLITE_POOL_SIZE=5
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
       # For PostgreSQL with redis and workers
       - EXECUTIONS_MODE=queue
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?err} # Use .env file
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?err}
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
       - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
       - DB_POSTGRESDB_POOL_SIZE=3
@@ -102,16 +124,16 @@ services:
       - NODE_FUNCTION_ALLOW_BUILTIN=true
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
     volumes:
-      - n8n-data:/home/node/.n8n:z # SELinux fix
+      - n8n-data:/home/node/.n8n:z
     restart: unless-stopped
     depends_on:
-      postgres: 
+      postgres:
         condition: service_healthy
-      redis: 
+      redis:
         condition: service_healthy
 
   n8n-worker:
-    image: docker.io/n8nio/n8n:latest # Match the main service version.
+    image: docker.io/n8nio/n8n:latest
     command: worker
     networks:
       - n8n-stack
@@ -120,9 +142,10 @@ services:
       - N8N_HOST=http://n8n-main:5678/api/v1
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?err} # Set in .env file.
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?err}
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
       - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
       - DB_POSTGRESDB_POOL_SIZE=3
@@ -156,10 +179,10 @@ services:
       - NODE_FUNCTION_ALLOW_BUILTIN=true
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
     volumes:
-      - n8n-data:/home/node/.n8n:z # SELinux fix
+      - n8n-data:/home/node/.n8n:z
     restart: unless-stopped
     depends_on:
-      n8n-main: 
+      n8n-main:
         condition: service_started
 
   # # The Ollama service for running local Language Models via AMD/NVidia
@@ -178,7 +201,7 @@ services:
   #   #   - /dev/dri
   #   restart: unless-stopped
 
-  # # # The Ollama service for running local Language Models via Intel
+  # # The Ollama service for running local Language Models via Intel
   # ollama:
   #   build:
   #     context: .
@@ -206,7 +229,7 @@ services:
   #   image: ghcr.io/open-webui/open-webui
   #   container_name: ollama-webui
   #   volumes:
-  #     - ollama-webui:/app/backend/data
+  #     - ollama-webui:/app/backend/data:z
   #   depends_on:
   #     - ollama
   #   ports:
@@ -223,20 +246,17 @@ services:
   #   networks:
   #     - n8n-stack
   #   environment:
-  #     - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err}
+  #     - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err} # Required: Set in .env
   #   command: >
   #     sh -c "
-  #       echo 'Waiting for Ollama to be available...'
-  #       until curl -s -f http://ollama:11434/api/tags > /dev/null; do
-  #         sleep 5
-  #       done
-  #       echo 'Ollama is up. Checking if model $${OLLAMA_DEFAULT_MODEL} exists...'
+  #       echo 'Waiting for Ollama to be available...' &&
+  #       until curl -s -f http://ollama:11434/api/tags > /dev/null; do sleep 5; done &&
+  #       echo 'Ollama is up. Checking if model $${OLLAMA_DEFAULT_MODEL} exists...' &&
   #       if ! curl -s http://ollama:11434/api/tags | grep -q $${OLLAMA_DEFAULT_MODEL}; then
-  #         echo 'Model not found. Pulling $${OLLAMA_DEFAULT_MODEL}...'
-  #         curl http://ollama:11434/api/pull -d \"{ \\\"name\\\": \\\"$${OLLAMA_DEFAULT_MODEL}\\\" }\"
-  #         echo 'Model pull complete.'
+  #         echo 'Model not found. Pulling $${OLLAMA_DEFAULT_MODEL}...' &&
+  #         curl http://ollama:11434/api/pull -d '{ \"name\": \"$${OLLAMA_DEFAULT_MODEL}\" }';
   #       else
-  #         echo 'Model $${OLLAMA_DEFAULT_MODEL} already exists.'
+  #         echo 'Model already exists.';
   #       fi
   #     "
   #   depends_on:
@@ -251,22 +271,92 @@ services:
     networks:
       - n8n-stack
     environment:
-      - N8N_API_KEY=${N8N_API_KEY}
+      - N8N_API_KEY=${N8N_API_KEY:?err} # Required: Set in .env
       - N8N_API_URL=http://n8n-main:5678/api/v1
       - MCP_MODE=http
       - N8N_MODE=true
-      - MCP_AUTH_TOKEN=test-token-minimum-32-chars-long
-      - AUTH_TOKEN=test-token-minimum-32-chars-long
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?err} # Required: Set in .env
+      - AUTH_TOKEN=${MCP_AUTH_TOKEN:?err} # Required: Set in .env
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
       n8n-main:
         condition: service_started
 
+  # Nginx Proxy Manager for reverse proxying services.
+  proxy:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    networks:
+      - n8n-stack
+    environment:
+      - DB_MYSQL_HOST=proxy_db
+      - DB_MYSQL_USER=npm
+      - DB_MYSQL_PASSWORD=${NPM_DB_PASSWORD:?err} # Required: Set in .env
+      - DB_MYSQL_NAME=npm
+    volumes:
+      - npm_data:/data:z
+      - npm_letsencrypt:/etc/letsencrypt:z
+    depends_on:
+      proxy_db:
+        condition: service_healthy # Waits for the DB to be ready
+
+  # MariaDB database for Nginx Proxy Manager.
+  proxy_db:
+    image: jc21/mariadb-aria:latest
+    container_name: npm-mariadb
+    restart: unless-stopped
+    networks:
+      - n8n-stack
+    environment:
+      - MYSQL_ROOT_PASSWORD=${NPM_DB_ROOT_PASSWORD:?err} # Required: Set in .env
+      - MYSQL_DATABASE=npm
+      - MYSQL_USER=npm
+      - MYSQL_PASSWORD=${NPM_DB_PASSWORD:?err} # Required: Set in .env
+    volumes:
+      - npm_db_data:/var/lib/mysql:z
+    healthcheck:
+      # This check ensures the DB is ready before other services connect.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Watchtower for automatically updating running containers.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    networks:
+      - n8n-stack
+    environment:
+      # Sets the timezone for correct log timestamps. Inherits from .env file.
+      - TZ=${GENERIC_TIMEZONE:-America/Denver}
+      # Poll for new images every 24 hours (86400 seconds).
+      - WATCHTOWER_POLL_INTERVAL=86400
+      # Removes old images after a successful update.
+      - WATCHTOWER_CLEANUP=true
+      # Disables the initial notification message on startup.
+      - WATCHTOWER_NO_STARTUP_MESSAGE=true
+    volumes:
+      # Mount the podman socket to allow Watchtower to manage containers.
+      - /var/run/docker.sock:/var/run/docker.sock:z
+
 # Top-level 'volumes' declaration for all persistent data.
 volumes:
   n8n-data:
   n8n-postgres-data:
+  client-postgres-data:
   n8n-redis-data:
+  # # Volumes for ollama
   # ollama-data:
   # ollama-webui:
+  # Volumes for Nginx Proxy Manager
+  npm_data:
+  npm_letsencrypt:
+  npm_db_data:

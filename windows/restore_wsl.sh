@@ -2,16 +2,19 @@
 
 # This script restores the n8n instance from a selected backup using a hot-swap method.
 # It now also restores all databases for the independent 'clientData' PostgreSQL container.
+# This version is designed to be run from the 'windows' subdirectory via a wrapper.
 # WARNING: This is a destructive operation and will restart your n8n pod.
-# It should be run from the root directory of the toolkit.
 
 set -e # Exit on any error
 
-# --- Configuration ---
-# --- DYNAMIC PATHING & CONFIGURATION ---
+# --- Configuration (Dynamic Pathing) ---
+# Resolve the script's actual location (e.g., /mnt/c/project/windows)
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-PROJECT_ROOT=$(dirname "$SCRIPT_DIR")
-COMPOSE_FILE="${PROJECT_ROOT}/fedora/podman-compose.yml"
+# PROJECT_ROOT is two directories up (e.g., /mnt/c/project)
+PROJECT_ROOT=$(dirname $(dirname "$SCRIPT_DIR"))
+
+# Set paths using the calculated PROJECT_ROOT
+COMPOSE_FILE="${PROJECT_ROOT}/windows/podman-compose.yml"
 BACKUP_DIR="${PROJECT_ROOT}/backups"
 ENV_FILE="${PROJECT_ROOT}/.env"
 
@@ -24,9 +27,11 @@ OLLAMA_VOLUME_NAME="${PROJECT_NAME}_ollama-data"
 N8N_DATA_VOLUME="${PROJECT_NAME}_n8n-data"
 POD_NAME="pod_${PROJECT_NAME}"
 
-POSTGRES_HOST_CD="clientData"
-POSTGRES_USER_CD="admin" # Must match the user used for dumping
+# Client DB variables from the attached restore.sh
+POSTGRES_HOST_CD="clientData" # Container Name for Client DB
+POSTGRES_USER_CD="admin"     # User for Client DB
 
+# Variables for n8n DB (read from .env)
 POSTGRES_HOST="${POSTGRES_HOST:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-n8n}"
 POSTGRES_USER="${POSTGRES_USER:-n8n}"
@@ -42,24 +47,26 @@ if ! command -v podman &> /dev/null || ! command -v podman-compose &> /dev/null;
     exit 1
 fi
 
-if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A $BACKUP_DIR)" ]; then
+if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR")" ]; then
     echo -e "${RED}Error: Backup directory '$BACKUP_DIR' not found or is empty.${NC}"
     exit 1
 fi
 
 if [ -f "$ENV_FILE" ]; then
     set -a
+    # Source environment variables using the absolute path
     source "$ENV_FILE"
     set +a
 else
-    echo "❌ Error: .env file not found at ${PROJECT_ROOT}/.env"
+    echo "❌ Error: .env file not found at $ENV_FILE"
     exit 1
 fi
 
 # --- User Interaction ---
 echo "Please select a backup to restore from:"
 PS3="Enter the number of the backup: "
-select backup_folder in $(ls -d $BACKUP_DIR/backup_*/ | xargs -n 1 basename); do
+# Use the absolute BACKUP_DIR path
+select backup_folder in $(ls -d "$BACKUP_DIR"/backup_*/ | xargs -n 1 basename); do
     if [ -n "$backup_folder" ]; then
         SELECTED_BACKUP_DIR="$BACKUP_DIR/$backup_folder"
         echo -e "${GREEN}You have selected: $backup_folder${NC}"
@@ -71,7 +78,7 @@ done
 
 N8N_DB_BACKUP_FILE="$SELECTED_BACKUP_DIR/n8n_database.sql.gz"
 N8N_BACKUP_FILE="$SELECTED_BACKUP_DIR/n8n_files.tar.gz"
-CLIENT_DB_BACKUP_DIR="$SELECTED_BACKUP_DIR/client_databases" # New directory
+CLIENT_DB_BACKUP_DIR="$SELECTED_BACKUP_DIR/client_databases"
 
 echo "Checking for required files in $backup_folder..."
 if [ ! -f "$N8N_DB_BACKUP_FILE" ] || [ ! -f "$N8N_BACKUP_FILE" ]; then
@@ -97,6 +104,7 @@ echo -e "\n--- Starting Restore Process ---"
 # --- Step 1: Stop stack and destroy old volumes ---
 echo
 echo "🛑 Stopping n8n stack and removing existing volumes..."
+# Change directory to the PROJECT_ROOT for volume/pod commands to work reliably
 cd "${PROJECT_ROOT}"
 # The simplest and safest way to ensure a clean state is to remove the Pod and related volumes.
 podman pod stop "pod_$PROJECT_NAME" --ignore
@@ -109,6 +117,7 @@ echo "Restoring n8n data to new volume '${N8N_DATA_VOLUME_NAME}'..."
 podman volume create "${N8N_DATA_VOLUME_NAME}"
 
 # Use a helper container to unpack the archive into the newly created volume
+# NOTE: File paths must be absolute, which they are now.
 podman run --rm \
     -v "${N8N_DATA_VOLUME_NAME}:/volume-data:z" \
     -v "${N8N_BACKUP_FILE}:/backup/archive.tar.gz:ro,z" \
@@ -120,6 +129,7 @@ echo "✅ n8n data volume restore complete."
 # --- Step 3: Restore n8n Database ---
 echo "Step 3: Restoring n8n database..."
 echo "Starting PostgreSQL service to receive data..."
+# Use absolute COMPOSE_FILE path
 podman-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d "${POSTGRES_HOST}"
 
 echo "Waiting for n8n PostgreSQL to be healthy..."
@@ -131,8 +141,7 @@ echo
 echo "✅ n8n PostgreSQL is healthy."
 
 echo "Importing n8n database from '${N8N_DB_BACKUP_FILE}'..."
-# Pipe the backup file into 'podman exec' which runs pg_restore inside the container.
-# Execute as the OS user 'postgres' and connect as the DB user 'n8n'.
+# Pipe the backup file (absolute path) into 'podman exec'
 gunzip < "$N8N_DB_BACKUP_FILE" | podman exec -i --user postgres \
   "n8n-${POSTGRES_HOST}" \
   pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --exit-on-error

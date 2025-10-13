@@ -1,32 +1,42 @@
 #!/bin/bash
-# A non-disruptive script to back up a running n8n podman-compose stack.
-# This script is intended to be run from the project root directory.
+# Core logic for n8n and clientData backup, designed to be executed via a 
+# Windows PowerShell wrapper (backup.ps1).
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-# --- Configuration ---
-BACKUP_DIR="./backups"
-COMPOSE_FILE="./fedora/podman-compose.yml"
-ENV_FILE="./.env"
+# --- Configuration (Dynamic Pathing) ---
+# Resolve the script's actual location (e.g., /mnt/c/project/windows)
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+# PROJECT_ROOT is two directories up (e.g., /mnt/c/project)
+PROJECT_ROOT=$(dirname $(dirname "$SCRIPT_DIR"))
 
+# Set paths using the calculated PROJECT_ROOT
+BACKUP_DIR="${PROJECT_ROOT}/backups"
+# COMPOSE_FILE is in the 'fedora' subdirectory
+COMPOSE_FILE="${PROJECT_ROOT}/fedora/podman-compose.yml"
+# ENV_FILE is in the project root
+ENV_FILE="${PROJECT_ROOT}/.env"
+
+# Independent Database Configuration
 CLIENT_DB_CONTAINER_NAME="clientData"
 CLIENT_DB_USER="admin"
 
 # --- Pre-flight Checks ---
 echo "🚀 Running pre-flight checks..."
 if ! command -v podman &> /dev/null || ! command -v podman-compose &> /dev/null; then
-    echo "❌ Error: 'podman' or 'podman-compose' not found." >&2; exit 1;
+    echo "❌ Error: 'podman' or 'podman-compose' not found. Please install them." >&2; exit 1;
 fi
 if ! command -v jq &> /dev/null; then
     echo "❌ Error: 'jq' is not installed, which is required for JSON modifications." >&2; exit 1;
 fi
 if [ ! -f "$COMPOSE_FILE" ]; then
-    echo "❌ Error: Compose file not found. Please run this script from your project's root directory." >&2; exit 1;
+    echo "❌ Error: Compose file not found at: $COMPOSE_FILE" >&2; exit 1;
 fi
 if [ ! -f "$ENV_FILE" ]; then
-    echo "❌ Error: '$ENV_FILE' not found in the project root. Cannot proceed without credentials." >&2; exit 1;
+    echo "❌ Error: '$ENV_FILE' not found. Cannot proceed without credentials." >&2; exit 1;
 fi
+# Use the absolute path for mkdir
 mkdir -p "$BACKUP_DIR"
 
 # --- Main Logic ---
@@ -51,6 +61,7 @@ echo "🔎 Verifying that core n8n containers are running..."
 for C in "n8n-postgres" "n8n-main"; do
     if ! podman container exists "$C" || ! podman inspect --format='{{.State.Running}}' "$C" | grep -q "true"; then
         echo "⚠️ Container '$C' not found or not running. Starting the stack..."
+        # NOTE: Using the absolute COMPOSE_FILE path
         podman-compose -f "$COMPOSE_FILE" up -d
         echo "Waiting for services to initialize..."
         sleep 15
@@ -126,6 +137,7 @@ echo "✅ Data volume backup complete: $N8N_BACKUP_FILE"
 
 # Export workflows and credentials from the container
 podman exec -u node -it n8n-main n8n export:workflow --backup --output=backups/latest/workflows
+# NOTE: The path inside the container is relative, but the copy to the host uses the absolute path
 podman cp n8n-main:/home/node/backups/latest/workflows/. "$WORKFLOW_DIR"
 podman exec -u node -it n8n-main rm -rf ./backups/latest/workflows
 
@@ -161,7 +173,7 @@ note_content="&nbsp;
 &nbsp;
 # Well, hello there! Your workflow has arrived.
 
-Looks like you've just beamed in a shiny new n8n workflow, teleported straight out of someone's instance courtesy of the export tool by **Auggy Brbor**. Before you unleash its automated power upon the world, let's go through a quick pre-flight check to ensure a smooth takeoff.
+Looks like you've beamed in a shiny new n8n workflow, teleported straight out of someone's instance courtesy of the export tool by **Auggy Brbor**. Before you unleash its automated power upon the world, let's go through a quick pre-flight check to ensure a smooth takeoff.
 
 ### **Pre-Flight Checklist: 3 Simple Steps**
 
@@ -206,18 +218,18 @@ set -e
 if [ $jq_exit_code -ne 0 ]; then
     echo "  -> ❌ Error: Failed to build the note JSON object with jq (exit code: $jq_exit_code)." >&2
     echo "  -> This can happen with special characters. Aborting modifications." >&2
-    return 1 # Propagate the failure
+    exit 1 # Propagate the failure
 fi
 
 
 if [ ! -d "$WORKFLOW_DIR" ]; then
     echo "  -> Warning: Target directory for JSON modification does not exist: $WORKFLOW_DIR"
-    return
+    exit 0 # Non-critical failure
 fi
 # Check if directory is empty
 if [ -z "$(ls -A "$WORKFLOW_DIR")" ]; then
     echo "  -> Skipping: No workflow files were found in the backup directory."
-    return
+    exit 0 # Non-critical failure
 fi
 
 echo "  -> Scanning for .json files in $WORKFLOW_DIR..."
