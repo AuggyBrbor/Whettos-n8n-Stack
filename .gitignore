@@ -5,6 +5,7 @@ dist/
 # Ignore runtime artifacts
 backups/
 imports/
+RouteSheets/
 logs/
 
 # Ignore environment variables
