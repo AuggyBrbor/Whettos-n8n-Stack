@@ -87,6 +87,7 @@ services:
       - WEBHOOK_URL=http://127.0.0.1:5678
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - NODE_ENV=production
       # For PostgreSQL with redis and workers
       - EXECUTIONS_MODE=queue
       - DB_TYPE=postgresdb
@@ -123,9 +124,13 @@ services:
       - N8N_UNVERIFIED_PACKAGES_ENABLED=true
       - NODE_FUNCTION_ALLOW_BUILTIN=true
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_SECURE_COOKIE=false
+      - N8N_PROTOCOL=http
     volumes:
       - n8n-data:/home/node/.n8n:z
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,6 +145,8 @@ services:
     user: "1000:1000"
     environment:
       - N8N_HOST=http://n8n-main:5678/api/v1
+      - WEBHOOK_URL=http://n8n-main:5678
+      - NODE_ENV=production
       - N8N_AUTH_EXCLUDE_ENDPOINTS=api
       - EXECUTIONS_MODE=queue
       - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
@@ -154,7 +161,6 @@ services:
       - CACHE_TYPE=redis
       - CACHE_REDIS_HOST=redis
       - CONCURRENCY=${CONCURRENCY:-5}
-      - WEBHOOK_URL=http://n8n-main:5678
       - N8N_ENCRYPTION_KEY=${N8N_E_KEY:?err}
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
       - N8N_RUNNERS_ENABLED=true
@@ -178,9 +184,13 @@ services:
       - N8N_UNVERIFIED_PACKAGES_ENABLED=true
       - NODE_FUNCTION_ALLOW_BUILTIN=true
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_SECURE_COOKIE=false
+      - N8N_PROTOCOL=http
     volumes:
       - n8n-data:/home/node/.n8n:z
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       n8n-main:
         condition: service_started
@@ -196,6 +206,8 @@ services:
   #     - "127.0.0.1:11434:11434" # Bind to localhost.
   #   volumes:
   #     - ollama-data:/root/.ollama:z # SELinux fix
+    # labels:
+    #   - "com.centurylinklabs.watchtower.enable=true"
   #   # devices:
   #   #   - /dev/kfd
   #   #   - /dev/dri
@@ -221,6 +233,8 @@ services:
   #     - /dev/dri:/dev/dri
   #   volumes:
   #     - ollama-data:/root/.ollama:z # SELinux fix
+    # labels:
+    #   - "com.centurylinklabs.watchtower.enable=true"
   #   environment:
   #     - ONEAPI_DEVICE_SELECTOR=level_zero:0
   #     - IPEX_LLM_NUM_CTX=16384
@@ -238,6 +252,8 @@ services:
   #     - OLLAMA_BASE_URL=http://ollama:11434
   #   extra_hosts:
   #     - host.docker.internal:host-gateway
+    # labels:
+    #   - "com.centurylinklabs.watchtower.enable=true"
   #   restart: unless-stopped
 
   # ollama-setup:
@@ -245,6 +261,8 @@ services:
   #   container_name: ollama-setup
   #   networks:
   #     - n8n-stack
+    # labels:
+    #   - "com.centurylinklabs.watchtower.enable=true"
   #   environment:
   #     - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:?err} # Required: Set in .env
   #   command: >
@@ -279,6 +297,8 @@ services:
       - AUTH_TOKEN=${MCP_AUTH_TOKEN:?err} # Required: Set in .env
       - LOG_LEVEL=info
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
       n8n-main:
         condition: service_started
@@ -299,6 +319,8 @@ services:
       - DB_MYSQL_USER=npm
       - DB_MYSQL_PASSWORD=${NPM_DB_PASSWORD:?err} # Required: Set in .env
       - DB_MYSQL_NAME=npm
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     volumes:
       - npm_data:/data:z
       - npm_letsencrypt:/etc/letsencrypt:z
@@ -320,6 +342,8 @@ services:
       - MYSQL_PASSWORD=${NPM_DB_PASSWORD:?err} # Required: Set in .env
     volumes:
       - npm_db_data:/var/lib/mysql:z
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
       # This check ensures the DB is ready before other services connect.
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -343,9 +367,25 @@ services:
       - WATCHTOWER_CLEANUP=true
       # Disables the initial notification message on startup.
       - WATCHTOWER_NO_STARTUP_MESSAGE=true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
     volumes:
       # Mount the podman socket to allow Watchtower to manage containers.
       - /var/run/docker.sock:/var/run/docker.sock:z
+  pdf-merger:
+    build: ./pdf-merger
+    container_name: pdf-merger
+    restart: unless-stopped
+    user: "1000:1000"
+    volumes:
+      - ./RouteSheets:/data:rw
+    depends_on:
+      - gotenberg
+  gotenberg:
+    restart: unless-stopped
+    container_name: pdfHandler
+    image: gotenberg/gotenberg:8
+  
 
 # Top-level 'volumes' declaration for all persistent data.
 volumes:
